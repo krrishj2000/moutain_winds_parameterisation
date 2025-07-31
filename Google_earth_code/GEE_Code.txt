@@ -1,0 +1,123 @@
+// Define the coordinates of the rectangular box
+var bufferSizeMeters = 200; // 1000 km in meters
+var sc = 100; // Scale in meters
+
+
+var llatlons=
+[
+[45.97	,7.52],
+[27.9826,	86.9292],
+[46.78284,	10.79138],
+[27.9735	,86.9308],
+[27.981	,86.9023],
+[32.2858	,77.5305],
+[32.228297,	77.506293],
+[43.198	,42.757],
+[33.787596,	76.333945],
+[46.79867,	10.76042],
+[27.99	,86.83],
+[61.4841	,-142.9283],
+[46.47245,	10.61391],
+[28.24	,85.56],
+[28.25296,	85.68152],
+[50.426073	,-122.601628],
+[50.421835,	-122.598482],
+[50.414718,	-122.600217],
+[50.412846,	-122.615898],
+[27.95792,	86.814807],
+[30.773251,	79.408794],
+[-54.4	,-70.87],
+[27.9719	,86.9295],
+[27.843,	86.487],
+[50.155944	,-122.760257],
+[50.138823,	-122.775232],
+[46.872909,	10.714437],
+[28.23	,85.62]
+]
+
+
+
+
+for (var j = 0; j < 28; j = j + 1) { 
+  var latlon = llatlons[j];
+  var lat = latlon[0];
+  var lon = latlon[1];
+  
+  // Determine UTM CRS
+  var utmZone = Math.floor((lon + 180) / 6) + 1;
+  var utmCrs = 'EPSG:' + (lat >= 0 ? 32600 + utmZone : 32700 + utmZone);
+  // print(utmCrs);
+  // Create point and buffer in UTM projection
+  var point = ee.Geometry.Point([lon, lat]);
+  var utmPoint = point.transform(utmCrs, 1); // Transform to UTM with 1m error
+  var buffer = utmPoint.buffer(bufferSizeMeters); // Circular buffer of 1000 km radius
+  
+  // Load and prepare elevation data
+  var alosDataset = ee.ImageCollection("JAXA/ALOS/AW3D30/V3_2");
+  var elevation = alosDataset
+    .select('DSM')
+    .mosaic()
+    .clip(buffer)
+    .reproject({ crs: utmCrs, scale: sc });
+  
+  
+  // Calculate terrain derivatives
+  var aspect = ee.Terrain.aspect(elevation).reproject({ crs: utmCrs, scale: sc });
+  var slope = ee.Terrain.slope(elevation).reproject({ crs: utmCrs, scale: sc }).multiply(Math.PI).divide(180).tan();
+  var slope=ee.Terrain.slope(slope).reproject({ crs: utmCrs, scale: sc })
+  // Compute northness and eastness
+  var aspectRadians = aspect.multiply(Math.PI).divide(180);
+  var northness = aspectRadians.cos().rename('northness');
+  var eastness = aspectRadians.sin().rename('eastness');
+  elevation = elevation.addBands(northness).addBands(eastness).addBands(slope.rename('slope').addBands(aspect.rename('aspect')));
+  
+  // Calculate max elevation within the buffer
+  var max_elev = ee.Number(elevation.reduceRegion({
+    reducer: ee.Reducer.max(),
+    geometry: buffer,
+    scale: sc,
+    crs: utmCrs
+  }).get('DSM'));
+  var min_elev = ee.Number(elevation.reduceRegion({
+    reducer: ee.Reducer.min(),
+    geometry: buffer,
+    scale: sc,
+    crs: utmCrs
+  }).get('DSM'));
+  var stddev_elev = ee.Number(elevation.reduceRegion({
+    reducer: ee.Reducer.stdDev(),
+    geometry: buffer,
+    scale: sc,
+    crs: utmCrs
+  }).get('DSM'));
+    var mean_elev = ee.Number(elevation.reduceRegion({
+    reducer: ee.Reducer.mean(),
+    geometry: buffer,
+    scale: sc,
+    crs: utmCrs
+  }).get('DSM'));
+  var hillshade=ee.Terrain.hillshade(elevation,135,20).reproject({ crs: utmCrs, scale: sc });
+  
+  // Sample the central point's values
+  var sampledDict = elevation.reduceRegion({
+    reducer: ee.Reducer.first(),
+    geometry: point, // Original point (EE handles reprojection)
+    scale: sc,
+    crs: utmCrs,
+    maxPixels: 1e12
+  });
+  print(sampledDict.get('aspect'));
+  // print(mean_elev);
+  // print(relief_elev);
+  // print(stddev_elev);
+  // print("Max elevation",max_elev);
+  // print("Min elevation",min_elev);
+  // print(max_elev.subtract(min_elev));
+  // Visualization for a specific index (e.g., j=6)
+  // if (j===0) {
+  //   var rgbVis = { bands: ['slope', 'northness', 'eastness'], min: [0, -1, -1], max: [1, 1, 1] };
+  //   Map.addLayer(hillshade);
+  //   // Map.addLayer(elevation, rgbVis, 'Elevation Features');
+  //   Map.centerObject(point, 10); // Center map on the point
+  // }
+}
